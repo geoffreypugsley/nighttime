@@ -1,0 +1,117 @@
+#%%
+
+## load in the relavant packages
+
+from csat2 import misc, ECMWF, GOES
+from csat2.ECMWF.ECMWF import _calc_eis
+from csat2.misc import fileops
+import numpy as np
+from advection_functions.air_parcel import AirParcel25
+from advection_functions import plotting
+from datetime import datetime, timedelta
+from scipy.spatial import cKDTree
+import matplotlib.pyplot as plt
+from advection_functions import advection_funcs,GOES_AMSR_colocation,LWP_correction_funcs,plotting
+from scipy.stats import binned_statistic_2d,linregress
+import xarray as xr
+from netCDF4 import Dataset
+import pvlib
+import RSS
+import cftime
+import pandas as pd
+import os
+import matplotlib.patches as mpatches
+import xarray as xr
+from matplotlib import gridspec
+from matplotlib.colors import LogNorm
+import csat2.MODIS
+import cartopy.crs as ccrs
+import seaborn as sns
+from matplotlib.animation import FuncAnimation
+
+#%%
+
+# create GOES grid
+
+satellites = ['aqua','terra']
+num_days = 366
+
+GOES_dir = '/disk1/Data/GOES/Geoff/2020'
+
+file = os.path.join(GOES_dir,'GOES_LWC_2020_25_grid_20200105.nc')
+
+GOES = xr.open_dataset(file)
+
+#print(GOES)
+
+glon = GOES['lon'].values
+glat = GOES['lat'].values
+
+g_x_index = np.round((glon - glon.min()) * 4).astype(int)  # x index
+g_y_index = np.round((glat - glat.min()) * 4).astype(int)  # y index
+
+CSM_25 = GOES['CSM_25'].values
+CTP_25 = GOES['CTP_25'].values
+CER_25 = GOES['CER_25'].values
+COD_25 = GOES['COD_25'].values
+
+print(glon.shape,glat.shape,CSM_25.shape,CTP_25.shape,CER_25.shape,COD_25.shape)
+
+
+lon_grid,lat_grid = np.meshgrid(glon,glat) # create GOES lon and lat meshgrid
+
+init_time = datetime(2020,1,1,0,0,0)
+
+end_time = datetime(2020,12,31,23,59,59)
+
+# %%
+
+GOES_index = {'terra':21,'aqua':27}  # stores ther index of the aqua and terra overpasses, since GOES data is in 30 minute intervals
+gCER_all = []
+gCOD_all = []
+for i in range(num_days):
+    current_day = init_time + timedelta(days=i)
+    GOES_nc_file = os.path.join(GOES_dir, f'GOES_LWC_2020_25_grid_{current_day.strftime("%Y%m%d")}.nc')
+    gCER_all.append(xr.open_dataset(GOES_nc_file)['CER_25'].values)
+    gCOD_all.append(xr.open_dataset(GOES_nc_file)['COD_25'].values)
+
+gCER_all = np.array(gCER_all)
+gCOD_all = np.array(gCOD_all)
+gCER_overpass = {}
+gCOD_overpass = {}
+for sat in satellites:
+    gCER_overpass[sat] = np.array(gCER_all[:,GOES_index[sat],:,:])
+    gCOD_overpass[sat] = np.array(gCOD_all[:,GOES_index[sat],:,:])
+
+
+# %%
+
+MODIS_Nd = {} 
+
+for satellite in satellites:
+    MODIS_Nd_tot = []
+    for i in range(num_days):
+        current_day = init_time + timedelta(days=i)
+
+        MODIS_data = csat2.MODIS.readin('cdnc_best', year=2020, doy=i+1, sds=['Nd_G18'], sat=satellite)
+        Nd = MODIS_data.Nd_G18
+        MODIS_Nd_value = Nd.sel(lon=advection_funcs.normalize_longitude_180(glon), lat=glat, method='nearest').values[0]  # Select 0th element to avoid extra dimensions
+        MODIS_Nd_tot.append(MODIS_Nd_value)
+        MODIS_Nd[satellite] = np.array(MODIS_Nd_tot)
+
+# %%
+
+gNd_overpass = {}
+
+for sat in satellites:
+    gNd_overpass[sat] = 1.37*10**-5 * gCER_overpass[sat]**(-2.5) * gCOD_overpass[sat]**(0.5)
+
+
+
+# %%
+
+for sat in satellites:
+    plt.plot(gNd_overpass[sat].flatten(),gCER_overpass[sat].flatten(),'.',label=sat)
+    plt.legend()
+    plt.show()
+# %%
