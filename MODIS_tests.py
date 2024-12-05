@@ -67,3 +67,59 @@ plt.plot(lat)
 plt.show()
 
 # %%
+
+data = csat2.MODIS.readin("MOD06_L2", year=2020, doy=100,time = '2110',sds = ['Cloud_Effective_Radius'])
+
+# %%
+
+data = csat2.MODIS.readin('subset', year=2020, doy=100,sat = 'terra',sds = ['Cloud_Effective_Radius'])
+
+# %%
+
+data = csat2.MODIS.readin("MOD06_L2", year=2020, doy=100,time = '2110',sds = ['Cloud_Effective_Radius'])
+
+# %%
+data = csat2.MODIS.readin('cdnc_best', year=2018, doy=100, sds=['Nd_G18'])
+# %%
+
+data = csat2.MODIS.readin('subset', year=2019, doy=1,sat = "terra",sds = ['Cloud_Effective_Radius'])
+
+
+# %%
+
+data = csat2.MODIS.readin('subset', year=2020, doy=311,col = '61',sat = 'aqua')
+
+# %%
+
+
+data = csat2.MODIS.readin('subset', year=2020, doy=311,col = '61',sat = 'aqua')
+
+# %%
+
+data = csat2.MODIS.readin('cdnc_best', year=2018, doy=100, sds=['Nd_G18'])
+
+# %%
+
+
+dir = '/net/seldon/disk1/Data/MODIS/subset/2020'
+
+file = os.path.join(dir,'new.257.c61.nc')
+# %%
+
+MOD = xr.open_dataset(file)
+
+# %%
+print(MOD)
+# %%
+print(MOD.keys)
+# %%
+print(MOD.variables)
+# %%
+print(MOD.data_vars)
+# %%
+
+data = csat2.MODIS.readin('subset', year=2020, doy=311,col = '61',sat = 'aqua',sds = ['CTP'])
+
+# %%
+data = csat2.MODIS.readin('cdnc_best', year=2018, doy=100, sds=['Nd_G18'])
+# %%

@@ -4,7 +4,7 @@
 
 from csat2 import misc, ECMWF, GOES
 from csat2.ECMWF.ECMWF import _calc_eis
-from csat2.misc import fileops
+from csat2.misc import fileops,time
 import numpy as np
 from advection_functions.air_parcel import AirParcel25
 from advection_functions import plotting
@@ -28,47 +28,428 @@ import csat2.MODIS
 import cartopy.crs as ccrs
 import seaborn as sns
 from matplotlib.animation import FuncAnimation
+from scipy.stats import pearsonr
 
 #%%
 
 # create GOES grid
 
+years = ['2020','2021','2022']
+
+year = 2020
+
 satellites = ['aqua','terra']
-num_days = 366
+num_days = 5
 
-GOES_dir = '/disk1/Data/GOES/Geoff/2020'
+GOES_dir = f'/disk1/Data/GOES/Geoff/{year}'
 
-file = os.path.join(GOES_dir,'GOES_LWC_2020_25_grid_20200105.nc')
+file = os.path.join(GOES_dir,f'GOES_LWC_{year}_25_grid_{year}0101.nc')
 
 GOES = xr.open_dataset(file)
 
 #print(GOES)
 
-glon = GOES['lon'].values
+glon360 = GOES['lon'] ## notes GOES lon is between 0 and 360
+glon180 = advection_funcs.normalize_longitude_180(glon360) ## convert to -180 to 180
+
+glon_min,glon_max,glat_min,glat_max = glon360.min(),glon360.max(),GOES['lat'].min(),GOES['lat'].max()
 glat = GOES['lat'].values
 
-g_x_index = np.round((glon - glon.min()) * 4).astype(int)  # x index
+g_x_index = np.round((glon360 - glon360.min()) * 4).astype(int)  # x index
 g_y_index = np.round((glat - glat.min()) * 4).astype(int)  # y index
 
-CSM_25 = GOES['CSM_25'].values
-CTP_25 = GOES['CTP_25'].values
-CER_25 = GOES['CER_25'].values
-COD_25 = GOES['COD_25'].values
+CSM_25 = GOES['CSM_25']  ## this is clear sky mask
+CTP_25 = GOES['CTP_25'] ## cloud top phase
+CER_25 = GOES['CER_25'] # effective radius
+COD_25 = GOES['COD_25']  # cloud optical depth
+CF_25 = GOES['CF_25'].values # cloud fraction
+UTC = GOES['time'].values # time
 
-print(glon.shape,glat.shape,CSM_25.shape,CTP_25.shape,CER_25.shape,COD_25.shape)
+init_time = datetime(year,1,1,0,0,0)
+
+end_time = datetime(year,12,31,23,59,59)
 
 
-lon_grid,lat_grid = np.meshgrid(glon,glat) # create GOES lon and lat meshgrid
 
-init_time = datetime(2020,1,1,0,0,0)
 
-end_time = datetime(2020,12,31,23,59,59)
+#%%
+
+#### THIS WILL ULTIMATELY BE A LOOP OVER ALL DAYS IN THE YEAR and over aqua and terra
+
+MODIS_data= csat2.MODIS.readin('cdnc_best', year=2021, doy=1, sds=['Nd_G18'], sat='terra')
+
+MODIS_data_subset = MODIS_data.sel(lon = slice(-180,-88.5),lat = slice(54.5,13.5)) ## do this so that all lon and lat are monotonically increasing
+mlon = MODIS_data_subset.lon
+mlat = MODIS_data_subset.lat
+
+MODIS_Nd = MODIS_data_subset.Nd_G18
+
+m_times_UTC = time.lst_to_utc(10.5,mlon) # MODIS overpass time, time in UTC
+m_times_UTC_repeated = np.repeat(m_times_UTC.values[:,np.newaxis],mlat.size,axis=1)
+
+GOES_Nd = 1.37*10**-5 * CER_25**(-2.5) * COD_25**(0.5)*10**9
+
+MODIS_Nd_colocated = []
+GOES_Nd_colocated = []
+
+for i in range(len(GOES.time)):
+    current_time = i/2 ## since GOES data is in 30 minute intervals, we need to divide by 2 to get the UTC time in hours after midnight
+    time_mask = abs(m_times_UTC_repeated - current_time) < 0.5 # true if the MODIS overpass time is within 30 minutes of the GOES time
+    MODIS_Nd_current_time = MODIS_Nd.where(time_mask) ## select the MODIS data at the time closest to the GOES time
+    MODIS_Nd_current_time_360 = MODIS_Nd_current_time.assign_coords(lon = advection_funcs.normalize_longitudes(MODIS_Nd_current_time.lon)) # convert GOES lon to -180 to 180 so it has same range as MODIS
+    MODIS_Nd_current_time_360 = MODIS_Nd_current_time_360.squeeze() ## remove the time dimension
+    GOES_Nd_current_time = GOES_Nd.isel(time = i) ## select the GOES data at the current time
+    MODIS_Nd_colocated.append(MODIS_Nd_current_time_360.sel(lon = GOES_Nd_current_time.lon,lat = GOES_Nd_current_time.lat,method = 'nearest')) ## select the MODIS data at the GOES grid points
+    GOES_Nd_current_time_masked = GOES_Nd_current_time.where(GOES_Nd_current_time.lon >180) ## since we have removed MODIS data less than -180 due to issues with the dateline
+    GOES_Nd_colocated.append(GOES_Nd_current_time_masked) ## select the GOES data at the MODIS grid points
+
+#%%
+
+
+    
+
+
+
+
+#%%
+
+def load_in_GOES_Nd(date, mask=False):
+    # Construct the file path using the current date (you might need to adjust `current_day` or pass `date` in the function)
+    GOES_nc_file = os.path.join(GOES_dir, f'GOES_LWC_{year}_25_grid_{date.strftime("%Y%m%d")}.nc')
+    #print(GOES_nc_file)
+    
+    # Open the dataset
+    GOES = xr.open_dataset(GOES_nc_file)
+    
+    # Extract variables
+    CER_25 = GOES['CER_25']  # Effective radius
+    COD_25 = GOES['COD_25'] # Cloud optical depth
+    CF_25= GOES['CF_25'] #low cloud fraction
+    
+    # Calculate Nd (cloud droplet number concentration)
+    GOES_Nd = 1.37 * 10**-5 * CER_25**(-2.5) * COD_25**(0.5) * 10**9
+    
+    # Apply mask if the condition is True
+    if mask is False:
+        return GOES_Nd,CF_25,CER_25,COD_25
+    else:
+        return GOES_Nd.where(mask)
+
+
+
+#%%
+
+## as above but loop over the doy
+
+MODIS_Nd_colocated = []
+GOES_Nd_colocated = []
+
+lst_overpass_time = {'terra':10.5,'aqua':13.5}
+sat = 'aqua'
+
+for i in range(360):
+
+    
+    current_day = init_time + timedelta(days=i) # current day
+    MODIS_data= csat2.MODIS.readin('cdnc_best', year=year, doy=i+1, sds=['Nd_G18'], sat=sat) # load in the corresponding MODIS data
+    #print(current_day)
+    print(i)
+
+    MODIS_data_subset = MODIS_data.sel(lon = slice(-180,-88.5),lat = slice(54.5,13.5)) ## just pick out subset of lat and lons corresponding to CONUS data
+    mlon = MODIS_data_subset.lon
+    mlat = MODIS_data_subset.lat
+
+    MODIS_Nd = MODIS_data_subset.Nd_G18
+
+    m_times_UTC = time.lst_to_utc(lst_overpass_time[sat],mlon) # MODIS overpass time, time in UTC
+    m_times_UTC_repeated = np.repeat(m_times_UTC.values[:,np.newaxis],mlat.size,axis=1)
+
+    GOES_Nd,CF_25,CER_25,COD_25 = load_in_GOES_Nd(current_day) # load in the GOES Nd data
+    #GOES_Nd = GOES_Nd.where(CF_25 > 0.9) # apply a cloud fraction mask to the GOES data
+    GOES_Nd = GOES_Nd.where((CER_25 > 8)&(COD_25>8)&(CF_25>0.9)) # apply a cloud fraction mask to the GOES data
+
+    MODIS_Nd_colocated_day = []
+    GOES_Nd_colocated_day = []
+
+    for j in range(len(GOES_Nd.time)):
+        current_time = j/2 ## since GOES data is in 30 minute intervals, we need to divide by 2 to get the UTC time in hours after midnight
+        time_mask = abs(m_times_UTC_repeated - current_time) < 0.15 # true if the MODIS overpass time is within 30 minutes of the GOES time
+        MODIS_Nd_current_time = MODIS_Nd.where(time_mask) ## select the MODIS data at the time closest to the GOES time
+        MODIS_Nd_current_time_360 = MODIS_Nd_current_time.assign_coords(lon = advection_funcs.normalize_longitudes(MODIS_Nd_current_time.lon)) # convert GOES lon to -180 to 180 so it has same range as MODIS
+        MODIS_Nd_current_time_360 = MODIS_Nd_current_time_360.squeeze() ## remove the time dimension
+        GOES_Nd_current_time = GOES_Nd.isel(time = j) ## select the GOES data at the current time
+        GOES_Nd_current_time_masked = GOES_Nd_current_time.where(GOES_Nd_current_time.lon >180)      ## since we have removed MODIS data less than -180 due to issues with the dateline
+        MODIS_Nd_colocated_day.append(MODIS_Nd_current_time_360.sel(lon = GOES_Nd_current_time.lon,lat = GOES_Nd_current_time.lat,method = 'nearest')) ## select the MODIS data at the GOES grid points
+        GOES_Nd_colocated_day.append(GOES_Nd_current_time_masked) ## select the GOES data at the MODIS grid points
+        
+        
+
+   
+    MODIS_Nd_colocated_arr = np.array(MODIS_Nd_colocated_day)
+    GOES_Nd_colocated_arr = np.array(GOES_Nd_colocated_day)
+
+    MODIS_Nd_colocated.append(MODIS_Nd_colocated_arr)
+    GOES_Nd_colocated.append(GOES_Nd_colocated_arr)
+
+
+###
+
+#%%
+
+MODIS_Nd_colocated_all = np.array(MODIS_Nd_colocated)
+GOES_Nd_colocated_all = np.array(GOES_Nd_colocated)
+
+#%%
+
+# Flatten the datasets
+modis = MODIS_Nd_colocated_all.flatten()
+goes = GOES_Nd_colocated_all.flatten()
+
+#%% MASKING
+
+goes[(goes < 5)] = np.nan
+
+#%%
+
+# Filter out NaNs and infinities
+valid_mask = ~np.isnan(modis) & ~np.isnan(goes) & ~np.isinf(modis) & ~np.isinf(goes)
+modis_valid = modis[valid_mask]
+goes_valid = goes[valid_mask]
+
+residuals = modis_valid - goes_valid
+ss_total = np.sum((modis_valid - np.mean(modis_valid))**2)
+
+# Calculate correlation coefficient
+corr_coeff, _ = pearsonr(modis_valid, goes_valid)
+ss_residual = np.sum(residuals**2)
+
+# 5. Calculate R^2 (Coefficient of Determination)
+r_squared = 1 - (ss_residual / ss_total)
+
+# Calculate R^2
+r_squared = corr_coeff**2
+mean_bias = np.mean(modis_valid - goes_valid)
+
+# Print results
+print(f"Correlation Coefficient: {corr_coeff:.3f}")
+print(f"R^2: {r_squared:.3f}")
+
+# Plot 2D histogram
+plt.figure(figsize=(8, 6))
+plt.hist2d(
+    modis_valid,
+    goes_valid,
+    bins=100,
+    norm=LogNorm(),
+    cmap='viridis'
+)
+plt.colorbar(label='Counts')
+plt.xlim([0,700])
+plt.ylim([0,700])
+plt.plot([0,700],[0,700],'r--')
+plt.xlabel('MODIS Nd')
+plt.ylabel('GOES Nd')
+plt.title(f'MODIS {sat} vs GOES\n $R^2$: {r_squared:.3f}, Mean Bias: {mean_bias:.3f} all,COD>8,CER>8,CF>0.9')
+plt.show()
+
+
+
+#%%
+plt.figure(figsize=(8, 6))
+
+# Create the KDE plot using Seaborn
+sns.kdeplot(
+    x=modis_valid,
+    y=goes_valid,
+    cmap='viridis',
+    shade=True,         # Fill the contour
+    bw_adjust=0.5,      # Bandwidth adjustment for smoothing
+    cbar=True           # Show the color bar
+)
+
+# Plot the line for comparison (like in your original plot)
+plt.plot([0, 700], [0, 700], 'r--')
+
+# Set plot limits
+plt.xlim([0, 300])
+plt.ylim([0, 300])
+
+# Labeling
+plt.xlabel('MODIS Nd')
+plt.ylabel('GOES Nd')
+plt.title(f'MODIS (aqua) vs GOES\n $R^2$: {r_squared:.3f}, Mean Bias: {mean_bias:.3f}')
+
+plt.show()
+
+#%%
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#%% This cell handles the plotting
+
+MODIS_Nd_colocated_arr = np.array(MODIS_Nd_colocated)
+GOES_Nd_colocated_arr = np.array(GOES_Nd_colocated)
+
+valid_mask = ~np.isnan(MODIS_Nd_colocated_arr) & ~np.isnan(GOES_Nd_colocated_arr) & \
+             ~np.isinf(MODIS_Nd_colocated_arr) & ~np.isinf(GOES_Nd_colocated_arr)
+
+MODIS_Nd_colocated_arr = MODIS_Nd_colocated_arr[valid_mask]
+GOES_Nd_colocated_arr = GOES_Nd_colocated_arr[valid_mask]
+
+
+
+plt.hist2d(
+    MODIS_Nd_colocated_arr.flatten(),
+    GOES_Nd_colocated_arr.flatten(),
+    bins=300,
+    norm=LogNorm()
+)
+plt.colorbar(label="Counts")
+plt.xlabel("MODIS_Nd")
+plt.ylabel("GOES_Nd")
+plt.xlim([0,500])
+plt.ylim([0,500])
+plt.title("MODIS(aqua) vs GOES Nd")
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# read out the MODIS grid, note that the MODIS grid is in -180 to 180
+
+MODIS_data= csat2.MODIS.readin('cdnc_best', year=2021, doy=1, sds=['Nd_G18'], sat='aqua')
+mlon = MODIS_data.lon
+mlat = MODIS_data.lat
+MODIS_data= MODIS_data.assign_coords(lon = advection_funcs.normalize_longitudes(mlon)) # convert GOES lon to -180 to 180 so it has same range as MODIS
+
+MODIS_Nd = MODIS_data.Nd_G18
+subset_MODIS_Nd = MODIS_Nd.sel(lat = slice(glat_min,glat_max),lon = slice(glon_min,glon_max),method = 'nearest')
+
+
+#GOES = GOES.assign_coords(lon = advection_funcs.normalize_longitude_180(GOES.lon)) # convert GOES lon to -180 to 180 so it has same range as MODIS
+
+MODIS_colocated = MODIS_Nd.sel()
+
+
+m_times_UTC = time.lst_to_utc(10.5,mlon) # MODIS overpass time, time in UTC
+m_times_UTC_repeated = np.repeat(m_times_UTC.values[:,np.newaxis],mlat.size,axis=1)
+MODIS_data['time'] = (['lon','lat'],m_times_UTC_repeated)
+
+GOES_time_index = np.rint(m_times_UTC*2).astype(int) # GOES time index
+
+GOES_time_index_mod = GOES_time_index.values % 48 # ensure that the GOES time index is between 0 and 47 since 48 is the same as 0
+
+GOES_time_index_repeated = np.repeat(GOES_time_index_mod[:,np.newaxis],mlat.size,axis=1) # repeat the GOES time index to match the shape of the MODIS data
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#%%
+
+gCER_all = []
+gCOD_all = []
+
+for i in range(num_days):
+    current_day = init_time + timedelta(days=i)
+    GOES_nc_file = os.path.join(GOES_dir, f'GOES_LWC_2020_25_grid_{current_day.strftime("%Y%m%d")}.nc')
+    gCER = xr.open_dataset(GOES_nc_file)['CER_25']
+    gCOD = xr.open_dataset(GOES_nc_file)['COD_25']
+    gNd = 1.37*10**-5 * gCER**(-2.5) * gCOD**(0.5)*10**9
+    gCER_all.append(xr.open_dataset(GOES_nc_file)['CER_25'].values)
+    gCOD_all.append(xr.open_dataset(GOES_nc_file)['COD_25'].values)
+
+    print(i)
+
+#%%
+
+
+for i in range(num_days):
+    current_day = init_time + timedelta(days=i)
+    MODIS_data = csat2.MODIS.readin('cdnc_best', year=2021, doy=i+1, sds=['Nd_G18'], sat='aqua')
+    Nd = MODIS_data.Nd_G18
+    Nd = Nd.sel(lon=advection_funcs.normalize_longitude_180(glon), lat=glat, method='nearest').values[0]  # Select 0th element to avoid extra dimensions
+
+#%%
+# calculate the UTC corresponding to the satellite overpass local solar times for each day, 10.5 and 13.5 respectively
+
+
+
+
+
+    
+
+#%%
+
+GOES_UTC_terra_overpass = time.lst_to_utc(10.5,glon180) #note doesn't matter if you use glon180 or glon360
+GOES_UTC_aqua_overpass = time.lst_to_utc(13.5,glon180)
+
+
+
+print(glon360.shape,glat.shape,CSM_25.shape,CTP_25.shape,CER_25.shape,COD_25.shape,CF_25.shape)
+
+
+lon_grid,lat_grid = np.meshgrid(glon360,glat) # create GOES lon and lat meshgrid
+
+
+
+
 
 # %%
 
 GOES_index = {'terra':21,'aqua':27}  # stores ther index of the aqua and terra overpasses, since GOES data is in 30 minute intervals
 gCER_all = []
 gCOD_all = []
+
 for i in range(num_days):
     current_day = init_time + timedelta(days=i)
     GOES_nc_file = os.path.join(GOES_dir, f'GOES_LWC_2020_25_grid_{current_day.strftime("%Y%m%d")}.nc')
@@ -89,29 +470,38 @@ for sat in satellites:
 MODIS_Nd = {} 
 
 for satellite in satellites:
+    print(satellite)
     MODIS_Nd_tot = []
     for i in range(num_days):
+        print(i)
         current_day = init_time + timedelta(days=i)
-
-        MODIS_data = csat2.MODIS.readin('cdnc_best', year=2020, doy=i+1, sds=['Nd_G18'], sat=satellite)
-        Nd = MODIS_data.Nd_G18
-        MODIS_Nd_value = Nd.sel(lon=advection_funcs.normalize_longitude_180(glon), lat=glat, method='nearest').values[0]  # Select 0th element to avoid extra dimensions
-        MODIS_Nd_tot.append(MODIS_Nd_value)
-        MODIS_Nd[satellite] = np.array(MODIS_Nd_tot)
+        try:
+            MODIS_data = csat2.MODIS.readin('cdnc_best', year=2021, doy=i+1, sds=['Nd_G18'], sat=satellite,resolution = 0.25)
+            Nd = MODIS_data.Nd_G18
+            MODIS_Nd_value = Nd.sel(lon=advection_funcs.normalize_longitude_180(glon), lat=glat, method='nearest').values[0]  # Select 0th element to avoid extra dimensions
+            MODIS_Nd_tot.append(MODIS_Nd_value)
+            MODIS_Nd[satellite] = np.array(MODIS_Nd_tot)
+        except IndexError:
+            MODIS_Nd[satellite] = np.full((glon.size,glat.size),np.nan)
+            
 
 # %%
 
 gNd_overpass = {}
 
 for sat in satellites:
-    gNd_overpass[sat] = 1.37*10**-5 * gCER_overpass[sat]**(-2.5) * gCOD_overpass[sat]**(0.5)
+    gNd_overpass[sat] = 1.37*10**-5 * gCER_overpass[sat]**(-2.5) * gCOD_overpass[sat]**(0.5)*10**9
 
-
+satellites = ['aqua','terra']
 
 # %%
 
 for sat in satellites:
-    plt.plot(gNd_overpass[sat].flatten(),gCER_overpass[sat].flatten(),'.',label=sat)
+    print(MODIS_Nd[sat].shape,gNd_overpass[sat].shape)
+    print(np.count_nonzero(np.isnan(MODIS_Nd[sat])),np.count_nonzero(~np.isnan(gNd_overpass[sat])))
+    plt.plot(MODIS_Nd[sat].flatten,gNd_overpass[sat].flatten(),'.',label=sat)
+    plt.xlabel('MODIS_Nd')
+    plt.ylabel('GOES_Nd')
     plt.legend()
     plt.show()
 # %%

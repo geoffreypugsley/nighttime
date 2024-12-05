@@ -27,6 +27,7 @@ from matplotlib.colors import LogNorm
 import csat2.MODIS
 import cartopy.crs as ccrs
 import seaborn as sns
+import itertools
 
 
 
