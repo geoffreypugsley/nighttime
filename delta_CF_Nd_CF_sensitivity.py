@@ -31,11 +31,12 @@ from matplotlib.animation import FuncAnimation
 
 #%%
 
-year,month,day_of_month,hour = 2020,1,1,15  ## initial date of interest
+year,month,day_of_month,hour = 2019,1,1,15  ## initial date of interest
+init_hour_UTC = hour
 
 start_time = datetime(year,month,day_of_month,hour)    # Start time of simulation
 
-duration =72           # Duration of time of advection in hours
+duration =84           # Duration of time of advection in hours, note that this si 3.5 days so that we have a dawn reading for the third day
 t_step = 0.5                         # Time step of that we sample data at
 lon_start, lon_end = 220, 230 #180,260#
 lat_start, lat_end = 25, 35 #20, 45 #
@@ -46,7 +47,7 @@ lats = np.arange(lat_start, lat_end + 0.25, 0.25)
 
 # Create a 2D grid of lon and lat using meshgrid
 lon_init, lat_init = np.meshgrid(lons, lats)    # Size of initial domain, in CONUS pixels (i.e. 1 = 2km)
-n_trajectories = 1050
+n_trajectories = 10
 time_between_trajectories = timedelta(hours=24)
 channel = 7
  ## number of pixels in a given spatial direction, this must be an integer
@@ -73,7 +74,7 @@ def dqf_filter(dqf_data):
 # make a netCDF file that is all the GOES CONUS data for 2020 at 0.25 degree resolution of 0.25 degree grid
 
 
-init_time = datetime(2020,1,1,0,0,0)
+#init_time = datetime(2020,1,1,0,0,0)
 
 #end_time = datetime(2020,12,31,23,59,59)
 channel = 7
@@ -82,9 +83,9 @@ channel = 7
 
 # create GOES grid
 
-GOES_dir = '/disk1/Data/GOES/Geoff/2020'
+GOES_dir = '/disk1/Data/GOES/Geoff/2020/v2'
 
-file = os.path.join(GOES_dir,'GOES_LWC_2020_25_grid_20200101.nc')
+file = os.path.join(GOES_dir,'GOES_LWC_2020_25_grid_20200101v2.nc')
 
 GOES = xr.open_dataset(file)
 
@@ -124,9 +125,43 @@ sorted_keys,repeated_keys = advection_funcs.sorted_unique_nested_keys(all_positi
 
 
 
-
 start_times = all_positions.keys()
 positions_arr = advection_funcs.dict_to_numpy(all_positions)
+
+#%%
+
+
+
+#%%
+
+all_times_UTC = []
+
+for init_time in all_positions.keys():
+    time_step = np.array(list(all_positions[init_time].keys()))
+    all_times_UTC.append(time_step)
+    
+UTC_arr = np.array(all_times_UTC) # an array of datetime objects for every position
+
+def datetime_to_fractional_hours(dt):
+    hours = dt.hour
+    minutes = dt.minute
+    seconds = dt.second
+    return hours + minutes / 60 + seconds / 3600
+
+def datetime_to_doy(dt):
+    return dt.timetuple().tm_yday
+
+fractional_hours_arr = np.vectorize(datetime_to_fractional_hours)(UTC_arr)
+doy_arr = np.vectorize(datetime_to_doy)(UTC_arr)
+
+UTC_hours_arr_expanded = np.expand_dims(fractional_hours_arr, axis=(2, 3))
+doy_arr_expanded = np.expand_dims(doy_arr, axis=(2, 3))
+
+
+
+LST_arr =  misc.time.utc_to_lst(UTC_hours_arr_expanded,positions_arr[:,:,0,:,:]) # convert the UTC times to LST
+
+
 
 #%%
 
@@ -158,10 +193,10 @@ EIS_dict = {init_time: {} for init_time in start_times}
 
 for init_time in start_times:
     print(init_time)
-    GOES_dir = f'/disk1/Data/GOES/Geoff/{init_time.year}'
+    GOES_dir = f'/disk1/Data/GOES/Geoff/{init_time.year}/v2'
     try:
         # Construct file path
-        GOES_nc_file = os.path.join(GOES_dir, f'GOES_LWC_{init_time.year}_25_grid_{init_time.strftime("%Y%m%d")}.nc')
+        GOES_nc_file = os.path.join(GOES_dir, f'GOES_LWC_{init_time.year}_25_grid_{init_time.strftime("%Y%m%d")}v2.nc')
         
         # Open GOES dataset
         GOES_data = xr.open_dataset(GOES_nc_file)
@@ -278,8 +313,8 @@ GOES_lats_MOD_op_time = {'aqua': lat_aqua, 'terra': lat_terra}
 
 for satellite in MODIS_sats:
     MODIS_Nd_total = []
-    
     for init_time in start_times:
+
         print(init_time)
         # Read in the MODIS data for the current day and satellite
         try:
@@ -290,6 +325,7 @@ for satellite in MODIS_sats:
         
             # Initialize a list to hold Nd values for each (lon, lat) pair
             MODIS_Nd_pairs = []
+            print(i)
         
             # Loop through each (lon, lat) pair
             for lon, lat in zip(advection_funcs.normalize_longitude_180(GOES_lons_MOD_op_time[satellite]['night_0'][i-1]).flatten(),GOES_lats_MOD_op_time[satellite]['night_0'][i-1].flatten()): # it is i-1 because the index starts at 0
@@ -305,6 +341,10 @@ for satellite in MODIS_sats:
     
     # Store the results for each satellite
     MOD_Nd[satellite] = np.array(MODIS_Nd_total)    
+#%%
+
+
+
 
 #%%
 
@@ -410,5 +450,27 @@ night_arr = delta_CF_x_array(delta_CF_night_0,CF_dusk_night_0,MOD_Nd_aqua,n_CFi_
 
 # save the outputs as netCDF files
 
-day_arr.to_netcdf('delta_CF_outputs/day_arr.nc')
-night_arr.to_netcdf('delta_CF_outputs/night_arr.nc')
+#day_arr.to_netcdf('delta_CF_outputs/day_arr.nc')
+#night_arr.to_netcdf('delta_CF_outputs/night_arr.nc')
+
+
+#%%
+
+print(day_arr)
+# %%
+night_arr['delta_CF_Nd_signal_M1'].plot()
+
+# %%
+
+day_arr['counts']/day_arr['counts'].sum(dim= 'CFi_bin').plot()
+
+# %%
+print(day_arr['counts'].sum(axis = 'CF_i'))
+
+# %%
+print(day_arr)
+# %%
+
+day_arr['counts'].sum(dim= 'Ndi_bin')
+
+# %%

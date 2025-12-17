@@ -1,5 +1,6 @@
 # %% load in the relavant packages
 
+########################################## NOTE that this script has been replaced with delta_CF_Nd_sensitivity
 
 ## load in the relavant packages
 
@@ -82,7 +83,7 @@ end_time = datetime(2020,12,31,23,59,59)
 channel = 7
 
 # %%
-GOES_dir = '/disk1/Data/GOES/Geoff/LWC'
+GOES_dir = f'/disk1/Data/GOES/Geoff/LWC'
 
 file = os.path.join(GOES_dir,'GOES_LWC_2020_25_grid_20200101.nc')
 
@@ -198,9 +199,9 @@ for satellite in MODIS_sats:
     MOD_polluted_mask[satellite] = np.repeat(MODIS_polluted_expand_dims,positions_arr.shape[1],axis = 1)
     
 
-    # %%
+# %%
 
-    temp_data_1000 = ECMWF.ERA5Data('Temperature', level='1000hPa', res='1grid')
+temp_data_1000 = ECMWF.ERA5Data('Temperature', level='1000hPa', res='1grid')
 temp_data_700 = ECMWF.ERA5Data('Temperature', level='700hPa', res='1grid')
 
 LTS_initial = np.zeros((n_trajectories,domain_dim,domain_dim)) #shape is (n_trajectories, x_coord, y_coord)
